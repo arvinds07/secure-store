@@ -1,0 +1,20 @@
+{
+  "users": [
+    {
+      "id": 1780900737664,
+      "name": "arvind",
+      "email": "arvinds0070@gmail.com",
+      "password": "$2b$10$1f1qWdqyiB2jBZytEt7Sw.R5Sx7HB.Ojch6G2IVzFdl5YhjN4dKLW"
+    }
+  ],
+  "files": [
+    {
+      "id": 1780900843800,
+      "user_id": 1780900737664,
+      "title": "arvinds",
+      "filename": "1780900843673-Screenshot (2).png",
+      "originalname": "Screenshot (2).png",
+      "file_password": "$2b$10$prRzMj/FlrGMOYDFq69eqOIYIHiCyR/OuNwGaeP1JspZ6dTkHwLry"
+    }
+  ]
+}
