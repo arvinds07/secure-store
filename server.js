@@ -7,6 +7,7 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
+app.use(express.static("public"));
 const PORT = 5000;
 const SECRET = "secret123";
 const DB_FILE = "database.json";
@@ -50,6 +51,7 @@ app.get("/", (req, res) => {
 <html>
 <head>
 <title>Secure File Store</title>
+<link rel="icon" type="image/jpeg" href="/logo.jpg">
 <style>
 body{font-family:Arial;background:#f2f2f2;padding:20px}
 h1{text-align:center}
