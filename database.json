@@ -16,5 +16,13 @@
       "originalname": "Screenshot (2).png",
       "file_password": "$2b$10$prRzMj/FlrGMOYDFq69eqOIYIHiCyR/OuNwGaeP1JspZ6dTkHwLry"
     }
+  ],
+  "folders": [],
+  "otps": [
+    {
+      "email": "arvinds0070@gmail.com",
+      "otp": "838160",
+      "expiresAt": 1780926047994
+    }
   ]
 }
