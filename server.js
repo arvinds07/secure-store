@@ -9,6 +9,7 @@ const session = require("express-session");
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const nodemailer = require("nodemailer");
+const cloudinary = require("cloudinary").v2;
 
 const app = express();
 
@@ -25,6 +26,11 @@ const GOOGLE_CALLBACK_URL =
   "http://localhost:5000/auth/google/callback";
 
 const EMAIL_USER = process.env.EMAIL_USER || "";
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 const EMAIL_PASS = process.env.EMAIL_PASS || "";
 
 app.use(cors());
@@ -822,6 +828,13 @@ function safeText(text) {
   return String(text || "").replace(/'/g, "").replace(/"/g, "");
 }
 
+function getFileUrl(file) {
+  if (String(file.filename || "").startsWith("http")) {
+    return file.filename;
+  }
+  return "/uploads/" + file.filename;
+}
+
 function renderFiles(files, folderId, target) {
   target.innerHTML = "";
 
@@ -831,28 +844,53 @@ function renderFiles(files, folderId, target) {
   }
 
   files.forEach(file => {
+    const realFolderId = file.folderId || folderId;
+    const fileUrl = getFileUrl(file);
     let preview = "";
 
     if (file.type.startsWith("image/")) {
-      preview = '<img class="thumb" onclick="viewFile(\\'' + folderId + '\\',\\'' + file.id + '\\',\\'' + file.filename + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\')" src="/uploads/' + file.filename + '">';
+      preview =
+        '<img class="thumb" onclick="viewFile(\\'' +
+        realFolderId + '\\',\\'' +
+        file.id + '\\',\\'' +
+        safeText(file.originalname) + '\\',\\'' +
+        file.type + '\\',\\'' +
+        encodeURIComponent(fileUrl) +
+        '\\')" src="' + fileUrl + '">';
     } else if (file.type.startsWith("video/")) {
-      preview = '<video class="video" onclick="viewFile(\\'' + folderId + '\\',\\'' + file.id + '\\',\\'' + file.filename + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\')" src="/uploads/' + file.filename + '"></video>';
+      preview =
+        '<video class="video" onclick="viewFile(\\'' +
+        realFolderId + '\\',\\'' +
+        file.id + '\\',\\'' +
+        safeText(file.originalname) + '\\',\\'' +
+        file.type + '\\',\\'' +
+        encodeURIComponent(fileUrl) +
+        '\\')" src="' + fileUrl + '"></video>';
     } else {
       preview = '<div class="thumb" style="display:flex;align-items:center;justify-content:center">File</div>';
     }
 
-    target.innerHTML += '<div class="file">' + preview + '<p><b>' + file.originalname + '</b></p><p class="small">' + file.sizeMB + ' MB</p><button onclick="viewFile(\\'' + folderId + '\\',\\'' + file.id + '\\',\\'' + file.filename + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\')">View</button></div>';
+    target.innerHTML +=
+      '<div class="file">' +
+      preview +
+      '<p><b>' + file.originalname + '</b></p>' +
+      '<p class="small">' + file.sizeMB + ' MB</p>' +
+      '<button onclick="viewFile(\\'' + realFolderId + '\\',\\'' + file.id + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\',\\'' + encodeURIComponent(fileUrl) + '\\')">View</button>' +
+      '<a href="/download/' + realFolderId + '/' + file.id + '?token=' + encodeURIComponent(token) + '"><button>Download</button></a>' +
+      '</div>';
   });
 }
 
-function viewFile(folderId, fileId, filename, name, type) {
+function viewFile(folderId, fileId, name, type, encodedUrl) {
+  const fileUrl = decodeURIComponent(encodedUrl);
+
   modalTitle.innerText = name;
   modalDownload.href = "/download/" + folderId + "/" + fileId + "?token=" + encodeURIComponent(token);
 
   if (type.startsWith("image/")) {
-    modalContent.innerHTML = '<img src="/uploads/' + filename + '">';
+    modalContent.innerHTML = '<img src="' + fileUrl + '">';
   } else if (type.startsWith("video/")) {
-    modalContent.innerHTML = '<video controls autoplay src="/uploads/' + filename + '"></video>';
+    modalContent.innerHTML = '<video controls autoplay src="' + fileUrl + '"></video>';
   } else {
     modalContent.innerHTML = "<p>Preview not available.</p>";
   }
@@ -1225,7 +1263,7 @@ app.get("/folder/:id", auth, (req, res) => {
   });
 });
 
-app.post("/folder/:id/upload", auth, upload.array("files", 100), (req, res) => {
+app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res) => {
   const db = ensureDBShape(readDB());
   const folder = db.folders.find(f => f.id === req.params.id);
 
@@ -1235,19 +1273,32 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), (req, res) => {
     return res.status(403).json({ error: "Only owner can upload" });
   }
 
-  req.files.forEach(file => {
-    folder.files.push({
-      id: Date.now().toString() + Math.random().toString(16).slice(2),
-      originalname: file.originalname,
-      filename: file.filename,
-      type: file.mimetype,
-      size: file.size,
-      uploadedAt: new Date().toISOString()
-    });
-  });
+  try {
+    for (const file of req.files) {
+      const result = await cloudinary.uploader.upload(file.path, {
+        resource_type: "auto",
+        folder: "secure-store"
+      });
 
-  writeDB(db);
-  res.json({ message: "Files uploaded" });
+      folder.files.push({
+        id: Date.now().toString() + Math.random().toString(16).slice(2),
+        originalname: file.originalname,
+        filename: result.secure_url,
+        cloudinaryId: result.public_id,
+        type: file.mimetype,
+        size: file.size,
+        uploadedAt: new Date().toISOString()
+      });
+
+      fs.unlinkSync(file.path);
+    }
+
+    writeDB(db);
+    res.json({ message: "Files uploaded" });
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Cloudinary upload failed" });
+  }
 });
 
 function findFileAccess(db, folderId, fileId, userId) {
@@ -1281,8 +1332,17 @@ app.get("/download/:folderId/:fileId", auth, (req, res) => {
 
   if (result.error) return res.status(403).send(result.error);
 
+  if (String(result.file.filename || "").startsWith("http")) {
+  return res.redirect(
+    result.file.filename.replace("/upload/", "/upload/fl_attachment/")
+  );
+}
+
   const filePath = path.join(__dirname, UPLOAD_DIR, result.file.filename);
-  if (!fs.existsSync(filePath)) return res.status(404).send("Uploaded file missing");
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Uploaded file missing");
+  }
 
   res.download(filePath, result.file.originalname);
 });

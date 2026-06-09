@@ -60,6 +60,53 @@
       ],
       "unlockedUsers": [],
       "createdAt": "2026-06-09T05:36:04.730Z"
+    },
+    {
+      "id": "1780994088516",
+      "user_id": 1780900737664,
+      "owner": "arvind",
+      "name": "7",
+      "password": "$2b$10$N5VBQq0ROFodZ4bCcksdvOuMGUpfaAr1YdjNiHjQJ.pr3bTRfAKTe",
+      "files": [
+        {
+          "id": "1780995374607fbc5c21364bdd8",
+          "originalname": "CSK-squad (1).png",
+          "filename": "https://res.cloudinary.com/dp5vjsgz9/image/upload/v1780995370/secure-store/atufg86e1vtes1hzf8nb.png",
+          "cloudinaryId": "secure-store/atufg86e1vtes1hzf8nb",
+          "type": "image/png",
+          "size": 2191600,
+          "uploadedAt": "2026-06-09T08:56:14.607Z"
+        },
+        {
+          "id": "1780996746318bc65fd6464765",
+          "originalname": "logo (1).jpg",
+          "filename": "https://res.cloudinary.com/dp5vjsgz9/image/upload/v1780996742/secure-store/shywj6q5nk6sg0cap7vs.jpg",
+          "cloudinaryId": "secure-store/shywj6q5nk6sg0cap7vs",
+          "type": "image/jpeg",
+          "size": 4678,
+          "uploadedAt": "2026-06-09T09:19:06.318Z"
+        },
+        {
+          "id": "1780997201077400c19dd737c28",
+          "originalname": "login page.png",
+          "filename": "https://res.cloudinary.com/dp5vjsgz9/image/upload/v1780997197/secure-store/xybfhb5hfj3ivvwfjy5g.png",
+          "cloudinaryId": "secure-store/xybfhb5hfj3ivvwfjy5g",
+          "type": "image/png",
+          "size": 4817,
+          "uploadedAt": "2026-06-09T09:26:41.077Z"
+        },
+        {
+          "id": "17809981674687df2a6358712",
+          "originalname": "file (1).jpg",
+          "filename": "https://res.cloudinary.com/dp5vjsgz9/image/upload/v1780998163/secure-store/wnmvwt8isnvz4rnfpfhh.jpg",
+          "cloudinaryId": "secure-store/wnmvwt8isnvz4rnfpfhh",
+          "type": "image/jpeg",
+          "size": 62194,
+          "uploadedAt": "2026-06-09T09:42:47.468Z"
+        }
+      ],
+      "unlockedUsers": [],
+      "createdAt": "2026-06-09T08:34:48.591Z"
     }
   ],
   "otps": [
