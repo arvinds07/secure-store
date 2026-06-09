@@ -17,7 +17,51 @@
       "file_password": "$2b$10$prRzMj/FlrGMOYDFq69eqOIYIHiCyR/OuNwGaeP1JspZ6dTkHwLry"
     }
   ],
-  "folders": [],
+  "folders": [
+    {
+      "id": "1780983364596",
+      "user_id": 1780900737664,
+      "owner": "arvind",
+      "name": "arvind",
+      "password": "$2b$10$oXd9EWlzaRGvCRl4Niw4yuHaN1tuJA.16puF5iwtS8VY6KoNg4tde",
+      "files": [
+        {
+          "id": "1780983383636363087a4063c88",
+          "originalname": "logo.jpg",
+          "filename": "1780983383625-logo.jpg",
+          "type": "image/jpeg",
+          "size": 4678,
+          "uploadedAt": "2026-06-09T05:36:23.636Z"
+        },
+        {
+          "id": "178098338363628aababa26a45",
+          "originalname": "login page.jpg",
+          "filename": "1780983383628-login_page.jpg",
+          "type": "image/jpeg",
+          "size": 3593,
+          "uploadedAt": "2026-06-09T05:36:23.636Z"
+        },
+        {
+          "id": "17809834669518d56bf27991af8",
+          "originalname": "PBKS-squad.png",
+          "filename": "1780983466891-PBKS-squad.png",
+          "type": "image/png",
+          "size": 2430603,
+          "uploadedAt": "2026-06-09T05:37:46.951Z"
+        },
+        {
+          "id": "178098356155844078fc3f7b1",
+          "originalname": "Se7en HD.mp4",
+          "filename": "1780983547751-Se7en_HD.mp4",
+          "type": "video/mp4",
+          "size": 483670453,
+          "uploadedAt": "2026-06-09T05:39:21.558Z"
+        }
+      ],
+      "unlockedUsers": [],
+      "createdAt": "2026-06-09T05:36:04.730Z"
+    }
+  ],
   "otps": [
     {
       "email": "arvinds0070@gmail.com",
