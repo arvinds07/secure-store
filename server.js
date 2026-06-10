@@ -883,7 +883,7 @@ function renderFiles(files, folderId, target) {
       '<p class="small">' + file.sizeMB + ' MB</p>' +
       '<button onclick="viewFile(\\'' + realFolderId + '\\',\\'' + file.id + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\',\\'' + encodeURIComponent(fileUrl) + '\\')">View</button>' +
       '<a href="/download/' + realFolderId + '/' + file.id + '?token=' + encodeURIComponent(token) + '"><button>Download</button></a>' +
-      '<button class="danger" onclick="deleteSingleFile(\'' + realFolderId + '\',\'' + file.id + '\')">Delete</button>' +
+      '<button class="danger" onclick="deleteSingleFile(\\'' + realFolderId + '\\',\\'' + file.id + '\\')">Delete</button>' +
       '</div>';
   });
 }
