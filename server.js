@@ -35,7 +35,7 @@ cloudinary.config({
 mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("MongoDB Connected"))
 .catch(err => console.log("MongoDB Error:", err));
-console.log("MONGO URI:", process.env.MONGO_URI);
+
 
 const EMAIL_PASS = process.env.EMAIL_PASS || "";
 
