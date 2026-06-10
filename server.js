@@ -12,6 +12,9 @@ const nodemailer = require("nodemailer");
 const cloudinary = require("cloudinary").v2;
 const mongoose = require("mongoose");
 
+// Localhost-la .env file use panna idhu help pannum. Render-la env variables direct-a use aagum.
+try { require("dotenv").config(); } catch (e) {}
+
 const app = express();
 
 const PORT = process.env.PORT || 5000;
@@ -31,9 +34,13 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
-mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("MongoDB Connected"))
-.catch(err => console.log("MongoDB Error:", err));
+if (!process.env.MONGO_URI) {
+  console.log("MongoDB Error: MONGO_URI missing. Add MONGO_URI in Render Environment or local .env file.");
+} else {
+  mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log("MongoDB Connected"))
+    .catch(err => console.log("MongoDB Error:", err.message));
+}
 
 
 
@@ -367,7 +374,6 @@ button:disabled{opacity:.55;cursor:not-allowed;transform:none}
       <input id="lemail" placeholder="Valid Gmail">
       <input id="lpass" type="password" placeholder="Password">
       <button onclick="login()">Login</button>
-      <button onclick="showAuth('register')">Create Account</button>
       <button onclick="showAuth('forgot')">Forgot Password?</button>
     </section>
 
@@ -936,35 +942,70 @@ async function uploadToFolder() {
   if (uploadFiles.files.length === 0) return showMsg("Select file", "error");
 
   uploadBtn.disabled = true;
-  uploadBtn.innerText = "Uploading to server...";
+  uploadBtn.innerText = "Preparing upload...";
   uploadProgressWrap.classList.remove("hide");
   uploadProgressBar.style.width = "0%";
   uploadProgressBar.innerText = "0%";
 
   let totalSize = 0;
   for (const file of uploadFiles.files) totalSize += file.size;
-  uploadInfo.innerText = "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) + " MB";
+
+  uploadInfo.innerText =
+    "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) +
+    " MB | Keep this tab open.";
 
   const formData = new FormData();
   for (const file of uploadFiles.files) formData.append("files", file);
 
   const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/folder/" + currentFolderId + "/upload");
+  xhr.open("POST", "/folder/" + currentFolderId + "/upload", true);
   xhr.setRequestHeader("Authorization", token);
+  xhr.timeout = 0;
+
+  let lastPercent = 0;
+  let uploadStartedAt = Date.now();
+
+  const slowTimer = setInterval(() => {
+    if (lastPercent === 0 && uploadBtn.disabled) {
+      uploadInfo.innerText =
+        "Still waiting for browser upload progress... If this stays 0% for long, your browser/network is buffering the large file.";
+    }
+  }, 8000);
+
+  xhr.upload.onloadstart = () => {
+    uploadBtn.innerText = "Uploading to server...";
+    uploadInfo.innerText =
+      "Upload started. Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) + " MB";
+  };
 
   xhr.upload.onprogress = event => {
-    if (event.lengthComputable) {
-      const percent = Math.round((event.loaded / event.total) * 100);
+    if (event.lengthComputable && event.total > 0) {
+      const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      lastPercent = percent;
+
       uploadProgressBar.style.width = percent + "%";
       uploadProgressBar.innerText = percent + "%";
-      if (percent >= 100) {
-        uploadBtn.innerText = "Processing in cloud... Please wait";
-        uploadInfo.innerText = "Upload reached server. Now saving to Cloudinary. Large videos may take time.";
-      }
+      uploadBtn.innerText = "Uploading to server... " + percent + "%";
+
+      uploadInfo.innerText =
+        "Uploaded: " + (event.loaded / (1024 * 1024)).toFixed(2) +
+        " MB / " + (event.total / (1024 * 1024)).toFixed(2) + " MB";
+    } else {
+      uploadInfo.innerText =
+        "Uploading... Browser cannot calculate exact percentage for this file.";
     }
   };
 
+  xhr.upload.onload = () => {
+    uploadProgressBar.style.width = "100%";
+    uploadProgressBar.innerText = "100%";
+    uploadBtn.innerText = "Processing in cloud... Please wait";
+    uploadInfo.innerText =
+      "Upload reached server. Now saving to Cloudinary. Large videos may take more time.";
+  };
+
   xhr.onload = () => {
+    clearInterval(slowTimer);
     uploadBtn.disabled = false;
     uploadBtn.innerText = "Upload Files";
 
@@ -975,6 +1016,8 @@ async function uploadToFolder() {
       showMsg("Files uploaded successfully", "success");
       uploadFiles.value = "";
       uploadInfo.innerText = "";
+      uploadProgressBar.style.width = "100%";
+      uploadProgressBar.innerText = "100%";
       openFolder(currentFolderId);
       loadDashboard();
     } catch {
@@ -983,9 +1026,17 @@ async function uploadToFolder() {
   };
 
   xhr.onerror = () => {
+    clearInterval(slowTimer);
     uploadBtn.disabled = false;
     uploadBtn.innerText = "Upload Files";
     showMsg("Upload failed. Network issue.", "error");
+  };
+
+  xhr.onabort = () => {
+    clearInterval(slowTimer);
+    uploadBtn.disabled = false;
+    uploadBtn.innerText = "Upload Files";
+    showMsg("Upload cancelled", "error");
   };
 
   xhr.send(formData);
