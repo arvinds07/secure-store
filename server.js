@@ -883,6 +883,7 @@ function renderFiles(files, folderId, target) {
       '<p class="small">' + file.sizeMB + ' MB</p>' +
       '<button onclick="viewFile(\\'' + realFolderId + '\\',\\'' + file.id + '\\',\\'' + safeText(file.originalname) + '\\',\\'' + file.type + '\\',\\'' + encodeURIComponent(fileUrl) + '\\')">View</button>' +
       '<a href="/download/' + realFolderId + '/' + file.id + '?token=' + encodeURIComponent(token) + '"><button>Download</button></a>' +
+      '<button class="danger" onclick="deleteSingleFile(\'' + realFolderId + '\',\'' + file.id + '\')">Delete</button>' +
       '</div>';
   });
 }
@@ -991,6 +992,28 @@ async function loadMyFiles() {
   if (data.error) return showMsg(data.error, "error");
 
   renderFiles(data.files, "myfiles", allMyFiles);
+}
+  async function deleteSingleFile(folderId, fileId) {
+  if (!confirm("Delete this file?")) return;
+
+  const response = await fetch("/file/" + folderId + "/" + fileId + "/delete", {
+    method: "DELETE",
+    headers: { Authorization: token }
+  });
+
+  const data = await response.json();
+
+  if (data.error) return showMsg(data.error, "error");
+
+  showMsg("File deleted successfully", "success");
+
+  if (currentFolderId) {
+    openFolder(currentFolderId);
+  } else {
+    loadMyFiles();
+  }
+
+  loadDashboard();
 }
 
 if (token) {
@@ -1281,16 +1304,28 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
 
   try {
     for (const file of req.files) {
-      const result = await cloudinary.uploader.upload(file.path, {
+      const options = {
         resource_type: "auto",
         folder: "secure-store"
-      });
+      };
+
+      let result;
+
+      if (file.size > 100 * 1024 * 1024) {
+        result = await cloudinary.uploader.upload_large(file.path, {
+          ...options,
+          chunk_size: 20 * 1024 * 1024
+        });
+      } else {
+        result = await cloudinary.uploader.upload(file.path, options);
+      }
 
       folder.files.push({
         id: Date.now().toString() + Math.random().toString(16).slice(2),
         originalname: file.originalname,
         filename: result.secure_url,
         cloudinaryId: result.public_id,
+        resourceType: result.resource_type,
         type: file.mimetype,
         size: file.size,
         uploadedAt: new Date().toISOString()
@@ -1352,7 +1387,44 @@ app.get("/download/:folderId/:fileId", auth, (req, res) => {
 
   res.download(filePath, result.file.originalname);
 });
+app.delete("/file/:folderId/:fileId/delete", auth, async (req, res) => {
+  const db = ensureDBShape(readDB());
+  let folder;
 
+  if (req.params.folderId === "myfiles") {
+    folder = db.folders.find(f =>
+      f.user_id === req.user.id &&
+      f.files.some(file => file.id === req.params.fileId)
+    );
+  } else {
+    folder = db.folders.find(f => f.id === req.params.folderId);
+  }
+
+  if (!folder) return res.json({ error: "Folder not found" });
+
+  if (folder.user_id !== req.user.id) {
+    return res.status(403).json({ error: "Only owner can delete files" });
+  }
+
+  const file = folder.files.find(f => f.id === req.params.fileId);
+  if (!file) return res.json({ error: "File not found" });
+
+  try {
+    if (file.cloudinaryId) {
+      await cloudinary.uploader.destroy(file.cloudinaryId, {
+        resource_type: file.resourceType || "image"
+      });
+    }
+
+    folder.files = folder.files.filter(f => f.id !== req.params.fileId);
+    writeDB(db);
+
+    res.json({ message: "File deleted" });
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "File delete failed" });
+  }
+});
 app.delete("/folder/:id/delete", auth, (req, res) => {
   const db = ensureDBShape(readDB());
   const folder = db.folders.find(f => f.id === req.params.id);
