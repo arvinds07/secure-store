@@ -17,7 +17,6 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const SECRET = process.env.SECRET || "secret123";
 const SESSION_SECRET = process.env.SESSION_SECRET || "session_secret_123";
-const DB_FILE = "database.json";
 const UPLOAD_DIR = "uploads";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
@@ -37,11 +36,54 @@ mongoose.connect(process.env.MONGO_URI)
 .catch(err => console.log("MongoDB Error:", err));
 
 
+
+
+const fileSchema = new mongoose.Schema({
+  id: String,
+  originalname: String,
+  filename: String,
+  cloudinaryId: String,
+  resourceType: String,
+  type: String,
+  size: Number,
+  uploadedAt: String
+}, { _id: false });
+
+const userSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  name: String,
+  email: { type: String, unique: true },
+  password: String,
+  authType: String,
+  createdAt: String
+});
+
+const folderSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  user_id: String,
+  owner: String,
+  name: String,
+  password: String,
+  files: [fileSchema],
+  unlockedUsers: [String],
+  createdAt: String
+});
+
+const otpSchema = new mongoose.Schema({
+  email: String,
+  otp: String,
+  expiresAt: Number
+});
+
+const User = mongoose.model("User", userSchema);
+const Folder = mongoose.model("Folder", folderSchema);
+const OTP = mongoose.model("OTP", otpSchema);
+
 const EMAIL_PASS = process.env.EMAIL_PASS || "";
 
 app.use(cors());
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static("public"));
 app.use("/uploads", express.static(UPLOAD_DIR));
 
@@ -55,29 +97,6 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-
-if (!fs.existsSync(DB_FILE)) {
-  fs.writeFileSync(DB_FILE, JSON.stringify({
-    users: [],
-    folders: [],
-    otps: []
-  }, null, 2));
-}
-
-function readDB() {
-  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-}
-
-function writeDB(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-}
-
-function ensureDBShape(db) {
-  if (!db.users) db.users = [];
-  if (!db.folders) db.folders = [];
-  if (!db.otps) db.otps = [];
-  return db;
-}
 
 function validGmail(email) {
   return /^[a-zA-Z0-9._%+-]+@gmail\.com$/.test(String(email || "").trim().toLowerCase());
@@ -101,15 +120,13 @@ function mb(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
 
-function userStorage(userId) {
-  const db = ensureDBShape(readDB());
+async function userStorage(userId) {
+  const folders = await Folder.find({ user_id: userId }).lean();
   let total = 0;
 
-  db.folders
-    .filter(folder => folder.user_id === userId)
-    .forEach(folder => {
-      folder.files.forEach(file => total += file.size || 0);
-    });
+  folders.forEach(folder => {
+    (folder.files || []).forEach(file => total += file.size || 0);
+  });
 
   return total;
 }
@@ -158,16 +175,19 @@ const upload = multer({
     }
   }),
   limits: {
-    fileSize: 1024 * 1024 * 1024
+    fileSize: 5 * 1024 * 1024 * 1024
   }
 });
 
 passport.serializeUser((user, done) => done(null, user.id));
 
-passport.deserializeUser((id, done) => {
-  const db = ensureDBShape(readDB());
-  const user = db.users.find(u => u.id === id);
-  done(null, user || false);
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await User.findOne({ id }).lean();
+    done(null, user || false);
+  } catch (err) {
+    done(err, false);
+  }
 });
 
 if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
@@ -175,31 +195,32 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
     callbackURL: GOOGLE_CALLBACK_URL
-  }, (accessToken, refreshToken, profile, done) => {
-    const email = profile.emails?.[0]?.value || "";
-    const verified = profile.emails?.[0]?.verified !== false;
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails?.[0]?.value || "";
+      const verified = profile.emails?.[0]?.verified !== false;
 
-    if (!validGmail(email) || !verified) {
-      return done(null, false);
+      if (!validGmail(email) || !verified) {
+        return done(null, false);
+      }
+
+      let user = await User.findOne({ email });
+
+      if (!user) {
+        user = await User.create({
+          id: Date.now().toString(),
+          name: profile.displayName || email.split("@")[0],
+          email,
+          password: "",
+          authType: "google",
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      return done(null, user);
+    } catch (err) {
+      return done(err, false);
     }
-
-    const db = ensureDBShape(readDB());
-    let user = db.users.find(u => u.email === email);
-
-    if (!user) {
-      user = {
-        id: Date.now().toString(),
-        name: profile.displayName || email.split("@")[0],
-        email,
-        password: "",
-        authType: "google",
-        createdAt: new Date().toISOString()
-      };
-      db.users.push(user);
-      writeDB(db);
-    }
-
-    return done(null, user);
   }));
 }
 
@@ -413,8 +434,8 @@ button:disabled{opacity:.55;cursor:not-allowed;transform:none}
         <p id="openFolderOwner" class="small"></p>
 
         <div id="ownerUploadBox">
-          <input id="uploadFiles" type="file" multiple accept="image/*,video/*">
-          <button id="uploadBtn" onclick="uploadToFolder()">Upload Images / Videos</button>
+          <input id="uploadFiles" type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar">
+          <button id="uploadBtn" onclick="uploadToFolder()">Upload Files</button>
           <div id="uploadProgressWrap" class="progress hide">
             <div id="uploadProgressBar">0%</div>
           </div>
@@ -912,10 +933,10 @@ function closeViewer() {
 
 async function uploadToFolder() {
   if (!currentFolderId) return showMsg("Open folder first", "error");
-  if (uploadFiles.files.length === 0) return showMsg("Select image/video", "error");
+  if (uploadFiles.files.length === 0) return showMsg("Select file", "error");
 
   uploadBtn.disabled = true;
-  uploadBtn.innerText = "Uploading...";
+  uploadBtn.innerText = "Uploading to server...";
   uploadProgressWrap.classList.remove("hide");
   uploadProgressBar.style.width = "0%";
   uploadProgressBar.innerText = "0%";
@@ -936,12 +957,16 @@ async function uploadToFolder() {
       const percent = Math.round((event.loaded / event.total) * 100);
       uploadProgressBar.style.width = percent + "%";
       uploadProgressBar.innerText = percent + "%";
+      if (percent >= 100) {
+        uploadBtn.innerText = "Processing in cloud... Please wait";
+        uploadInfo.innerText = "Upload reached server. Now saving to Cloudinary. Large videos may take time.";
+      }
     }
   };
 
   xhr.onload = () => {
     uploadBtn.disabled = false;
-    uploadBtn.innerText = "Upload Images / Videos";
+    uploadBtn.innerText = "Upload Files";
 
     try {
       const data = JSON.parse(xhr.responseText);
@@ -959,7 +984,7 @@ async function uploadToFolder() {
 
   xhr.onerror = () => {
     uploadBtn.disabled = false;
-    uploadBtn.innerText = "Upload Images / Videos";
+    uploadBtn.innerText = "Upload Files";
     showMsg("Upload failed. Network issue.", "error");
   };
 
@@ -1027,8 +1052,8 @@ if (token) {
 </html>`);
 });
 
+
 app.post("/register", async (req, res) => {
-  const db = ensureDBShape(readDB());
   const name = String(req.body.name || "").trim();
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = req.body.password;
@@ -1041,11 +1066,12 @@ app.post("/register", async (req, res) => {
     return res.json({ error: "Only a valid Gmail address is allowed. Example: name@gmail.com" });
   }
 
-  if (db.users.find(u => u.email === email)) {
+  const existing = await User.findOne({ email });
+  if (existing) {
     return res.json({ error: "Email already exists" });
   }
 
-  db.users.push({
+  await User.create({
     id: Date.now().toString(),
     name,
     email,
@@ -1054,12 +1080,10 @@ app.post("/register", async (req, res) => {
     createdAt: new Date().toISOString()
   });
 
-  writeDB(db);
   res.json({ message: "Register success" });
 });
 
 app.post("/login", async (req, res) => {
-  const db = ensureDBShape(readDB());
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = req.body.password;
 
@@ -1067,7 +1091,7 @@ app.post("/login", async (req, res) => {
     return res.json({ error: "Enter a valid Gmail address" });
   }
 
-  const user = db.users.find(u => u.email === email);
+  const user = await User.findOne({ email });
   if (!user) return res.json({ error: "User not found" });
 
   if (!user.password) {
@@ -1081,14 +1105,13 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/forgot/send-otp", async (req, res) => {
-  const db = ensureDBShape(readDB());
   const email = String(req.body.email || "").trim().toLowerCase();
 
   if (!validGmail(email)) {
     return res.json({ error: "Enter a valid Gmail address" });
   }
 
-  const user = db.users.find(u => u.email === email);
+  const user = await User.findOne({ email });
   if (!user) return res.json({ error: "Email not registered" });
 
   if (!user.password) {
@@ -1096,14 +1119,12 @@ app.post("/forgot/send-otp", async (req, res) => {
   }
 
   const otp = randomOTP();
-  db.otps = db.otps.filter(o => o.email !== email);
-  db.otps.push({
+  await OTP.deleteMany({ email });
+  await OTP.create({
     email,
     otp,
     expiresAt: Date.now() + 10 * 60 * 1000
   });
-
-  writeDB(db);
 
   try {
     await sendOTP(email, otp);
@@ -1115,7 +1136,6 @@ app.post("/forgot/send-otp", async (req, res) => {
 });
 
 app.post("/forgot/reset", async (req, res) => {
-  const db = ensureDBShape(readDB());
   const email = String(req.body.email || "").trim().toLowerCase();
   const otp = String(req.body.otp || "").trim();
   const newPassword = req.body.newPassword;
@@ -1124,80 +1144,71 @@ app.post("/forgot/reset", async (req, res) => {
     return res.json({ error: "All fields required" });
   }
 
-  const record = db.otps.find(o => o.email === email && o.otp === otp);
+  const record = await OTP.findOne({ email, otp });
   if (!record) return res.json({ error: "Invalid OTP" });
   if (Date.now() > record.expiresAt) return res.json({ error: "OTP expired" });
 
-  const user = db.users.find(u => u.email === email);
+  const user = await User.findOne({ email });
   if (!user) return res.json({ error: "User not found" });
 
   user.password = await bcrypt.hash(newPassword, 10);
-  db.otps = db.otps.filter(o => o.email !== email);
+  await user.save();
+  await OTP.deleteMany({ email });
 
-  writeDB(db);
   res.json({ message: "Password reset success" });
 });
 
-app.get("/dashboard", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
-  const user = db.users.find(u => u.id === req.user.id);
+app.get("/dashboard", auth, async (req, res) => {
+  const user = await User.findOne({ id: req.user.id }).lean();
 
   if (!user) return res.json({ error: "User not found" });
 
-  const used = userStorage(user.id);
+  const used = await userStorage(user.id);
   const oneTB = 1024 * 1024 * 1024 * 1024;
-
-  const folders = db.folders
-    .filter(f => f.user_id === user.id)
-    .map(f => ({
-      id: f.id,
-      name: f.name,
-      filesCount: f.files.length
-    }));
+  const folders = await Folder.find({ user_id: user.id }).lean();
 
   res.json({
     name: user.name,
     email: user.email,
     storageMB: mb(used),
     storagePercent: Math.min((used / oneTB) * 100, 100),
-    folders
+    folders: folders.map(f => ({
+      id: f.id,
+      name: f.name,
+      filesCount: (f.files || []).length
+    }))
   });
 });
 
-app.get("/settings", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
-  const user = db.users.find(u => u.id === req.user.id);
-
+app.get("/settings", auth, async (req, res) => {
+  const user = await User.findOne({ id: req.user.id }).lean();
   if (!user) return res.json({ error: "User not found" });
 
   res.json({
     name: user.name,
     email: user.email,
-    storageMB: mb(userStorage(user.id))
+    storageMB: mb(await userStorage(user.id))
   });
 });
 
-app.get("/my-files", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
+app.get("/my-files", auth, async (req, res) => {
+  const folders = await Folder.find({ user_id: req.user.id }).lean();
   const files = [];
 
-  db.folders
-    .filter(folder => folder.user_id === req.user.id)
-    .forEach(folder => {
-      folder.files.forEach(file => {
-        files.push({
-          ...file,
-          folderId: folder.id,
-          sizeMB: mb(file.size)
-        });
+  folders.forEach(folder => {
+    (folder.files || []).forEach(file => {
+      files.push({
+        ...file,
+        folderId: folder.id,
+        sizeMB: mb(file.size)
       });
     });
+  });
 
   res.json({ files });
 });
 
 app.post("/folder/create", auth, async (req, res) => {
-  const db = ensureDBShape(readDB());
   const name = String(req.body.name || "").trim();
   const password = req.body.password;
 
@@ -1205,10 +1216,10 @@ app.post("/folder/create", auth, async (req, res) => {
     return res.json({ error: "Folder name and password required" });
   }
 
-  const user = db.users.find(u => u.id === req.user.id);
+  const user = await User.findOne({ id: req.user.id }).lean();
   if (!user) return res.json({ error: "User not found" });
 
-  db.folders.push({
+  await Folder.create({
     id: Date.now().toString(),
     user_id: user.id,
     owner: user.name,
@@ -1219,34 +1230,30 @@ app.post("/folder/create", auth, async (req, res) => {
     createdAt: new Date().toISOString()
   });
 
-  writeDB(db);
   res.json({ message: "Folder created" });
 });
 
-app.get("/search", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
+app.get("/search", auth, async (req, res) => {
   const q = String(req.query.q || "").toLowerCase();
 
-  const folders = db.folders
-    .filter(f =>
-      f.name.toLowerCase().includes(q) ||
-      f.owner.toLowerCase().includes(q)
-    )
-    .map(f => ({
-      id: f.id,
-      name: f.name,
-      owner: f.owner,
-      filesCount: f.files.length,
-      isOwner: f.user_id === req.user.id
-    }));
+  const folders = await Folder.find({
+    $or: [
+      { name: { $regex: q, $options: "i" } },
+      { owner: { $regex: q, $options: "i" } }
+    ]
+  }).lean();
 
-  res.json(folders);
+  res.json(folders.map(f => ({
+    id: f.id,
+    name: f.name,
+    owner: f.owner,
+    filesCount: (f.files || []).length,
+    isOwner: f.user_id === req.user.id
+  })));
 });
 
 app.post("/folder/:id/unlock", auth, async (req, res) => {
-  const db = ensureDBShape(readDB());
-  const folder = db.folders.find(f => f.id === req.params.id);
-
+  const folder = await Folder.findOne({ id: req.params.id });
   if (!folder) return res.json({ error: "Folder not found" });
 
   if (folder.user_id === req.user.id) {
@@ -1258,20 +1265,18 @@ app.post("/folder/:id/unlock", auth, async (req, res) => {
 
   if (!folder.unlockedUsers.includes(req.user.id)) {
     folder.unlockedUsers.push(req.user.id);
+    await folder.save();
   }
 
-  writeDB(db);
   res.json({ message: "Folder unlocked" });
 });
 
-app.get("/folder/:id", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
-  const folder = db.folders.find(f => f.id === req.params.id);
-
+app.get("/folder/:id", auth, async (req, res) => {
+  const folder = await Folder.findOne({ id: req.params.id }).lean();
   if (!folder) return res.json({ error: "Folder not found" });
 
   const isOwner = folder.user_id === req.user.id;
-  const unlocked = folder.unlockedUsers.includes(req.user.id);
+  const unlocked = (folder.unlockedUsers || []).includes(req.user.id);
 
   if (!isOwner && !unlocked) {
     return res.status(403).json({ error: "Enter folder password first" });
@@ -1282,7 +1287,7 @@ app.get("/folder/:id", auth, (req, res) => {
     name: folder.name,
     owner: folder.owner,
     isOwner,
-    files: folder.files.map(file => ({
+    files: (folder.files || []).map(file => ({
       id: file.id,
       originalname: file.originalname,
       filename: file.filename,
@@ -1293,9 +1298,7 @@ app.get("/folder/:id", auth, (req, res) => {
 });
 
 app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res) => {
-  const db = ensureDBShape(readDB());
-  const folder = db.folders.find(f => f.id === req.params.id);
-
+  const folder = await Folder.findOne({ id: req.params.id });
   if (!folder) return res.json({ error: "Folder not found" });
 
   if (folder.user_id !== req.user.id) {
@@ -1310,7 +1313,6 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
       };
 
       let result;
-
       if (file.size > 100 * 1024 * 1024) {
         result = await cloudinary.uploader.upload_large(file.path, {
           ...options,
@@ -1331,10 +1333,10 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
         uploadedAt: new Date().toISOString()
       });
 
-      fs.unlinkSync(file.path);
+      if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
     }
 
-    writeDB(db);
+    await folder.save();
     res.json({ message: "Files uploaded" });
   } catch (err) {
     console.log(err);
@@ -1342,22 +1344,22 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
   }
 });
 
-function findFileAccess(db, folderId, fileId, userId) {
+async function findFileAccess(folderId, fileId, userId) {
   let folder;
 
   if (folderId === "myfiles") {
-    folder = db.folders.find(f =>
-      f.user_id === userId &&
-      f.files.some(file => file.id === fileId)
-    );
+    folder = await Folder.findOne({
+      user_id: userId,
+      "files.id": fileId
+    });
   } else {
-    folder = db.folders.find(f => f.id === folderId);
+    folder = await Folder.findOne({ id: folderId });
   }
 
   if (!folder) return { error: "Folder not found" };
 
   const isOwner = folder.user_id === userId;
-  const unlocked = folder.unlockedUsers.includes(userId);
+  const unlocked = (folder.unlockedUsers || []).includes(userId);
 
   if (!isOwner && !unlocked) return { error: "Folder locked" };
 
@@ -1367,17 +1369,16 @@ function findFileAccess(db, folderId, fileId, userId) {
   return { folder, file };
 }
 
-app.get("/download/:folderId/:fileId", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
-  const result = findFileAccess(db, req.params.folderId, req.params.fileId, req.user.id);
+app.get("/download/:folderId/:fileId", auth, async (req, res) => {
+  const result = await findFileAccess(req.params.folderId, req.params.fileId, req.user.id);
 
   if (result.error) return res.status(403).send(result.error);
 
   if (String(result.file.filename || "").startsWith("http")) {
-  return res.redirect(
-    result.file.filename.replace("/upload/", "/upload/fl_attachment/")
-  );
-}
+    return res.redirect(
+      result.file.filename.replace("/upload/", "/upload/fl_attachment/")
+    );
+  }
 
   const filePath = path.join(__dirname, UPLOAD_DIR, result.file.filename);
 
@@ -1387,37 +1388,25 @@ app.get("/download/:folderId/:fileId", auth, (req, res) => {
 
   res.download(filePath, result.file.originalname);
 });
+
 app.delete("/file/:folderId/:fileId/delete", auth, async (req, res) => {
-  const db = ensureDBShape(readDB());
-  let folder;
+  const result = await findFileAccess(req.params.folderId, req.params.fileId, req.user.id);
 
-  if (req.params.folderId === "myfiles") {
-    folder = db.folders.find(f =>
-      f.user_id === req.user.id &&
-      f.files.some(file => file.id === req.params.fileId)
-    );
-  } else {
-    folder = db.folders.find(f => f.id === req.params.folderId);
-  }
+  if (result.error) return res.status(403).json({ error: result.error });
 
-  if (!folder) return res.json({ error: "Folder not found" });
-
-  if (folder.user_id !== req.user.id) {
+  if (result.folder.user_id !== req.user.id) {
     return res.status(403).json({ error: "Only owner can delete files" });
   }
 
-  const file = folder.files.find(f => f.id === req.params.fileId);
-  if (!file) return res.json({ error: "File not found" });
-
   try {
-    if (file.cloudinaryId) {
-      await cloudinary.uploader.destroy(file.cloudinaryId, {
-        resource_type: file.resourceType || "image"
+    if (result.file.cloudinaryId) {
+      await cloudinary.uploader.destroy(result.file.cloudinaryId, {
+        resource_type: result.file.resourceType || "image"
       });
     }
 
-    folder.files = folder.files.filter(f => f.id !== req.params.fileId);
-    writeDB(db);
+    result.folder.files = result.folder.files.filter(f => f.id !== req.params.fileId);
+    await result.folder.save();
 
     res.json({ message: "File deleted" });
   } catch (err) {
@@ -1425,25 +1414,30 @@ app.delete("/file/:folderId/:fileId/delete", auth, async (req, res) => {
     res.json({ error: "File delete failed" });
   }
 });
-app.delete("/folder/:id/delete", auth, (req, res) => {
-  const db = ensureDBShape(readDB());
-  const folder = db.folders.find(f => f.id === req.params.id);
 
+app.delete("/folder/:id/delete", auth, async (req, res) => {
+  const folder = await Folder.findOne({ id: req.params.id });
   if (!folder) return res.json({ error: "Folder not found" });
 
   if (folder.user_id !== req.user.id) {
     return res.status(403).json({ error: "Only owner can delete" });
   }
 
-  folder.files.forEach(file => {
-    const filePath = path.join(__dirname, UPLOAD_DIR, file.filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  });
+  try {
+    for (const file of folder.files || []) {
+      if (file.cloudinaryId) {
+        await cloudinary.uploader.destroy(file.cloudinaryId, {
+          resource_type: file.resourceType || "image"
+        });
+      }
+    }
 
-  db.folders = db.folders.filter(f => f.id !== folder.id);
-
-  writeDB(db);
-  res.json({ message: "Folder deleted" });
+    await Folder.deleteOne({ id: folder.id });
+    res.json({ message: "Folder deleted" });
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Folder delete failed" });
+  }
 });
 
 app.listen(PORT, () => {
