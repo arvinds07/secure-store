@@ -10,6 +10,7 @@ const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const nodemailer = require("nodemailer");
 const cloudinary = require("cloudinary").v2;
+const mongoose = require("mongoose");
 
 const app = express();
 
@@ -31,6 +32,10 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+mongoose.connect(process.env.MONGO_URI)
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.log("MongoDB Error:", err));
+
 const EMAIL_PASS = process.env.EMAIL_PASS || "";
 
 app.use(cors());
