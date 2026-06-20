@@ -952,7 +952,7 @@ async function uploadToFolder() {
 
   uploadInfo.innerText =
     "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) +
-    " MB | Direct Cloudinary upload";
+    " MB | Direct Cloudinary upload. Keep this tab open.";
 
   try {
     const sigRes = await fetch("/cloudinary-signature", {
@@ -968,7 +968,7 @@ async function uploadToFolder() {
 
     for (let i = 0; i < uploadFiles.files.length; i++) {
       const file = uploadFiles.files[i];
-      await uploadOneFileDirectWithRetry(file, sig, i + 1, uploadFiles.files.length);
+      await uploadOneFileDirect(file, sig, i + 1, uploadFiles.files.length);
     }
 
     showMsg("Files uploaded successfully", "success");
@@ -988,17 +988,7 @@ async function uploadToFolder() {
   uploadBtn.innerText = "Upload Files";
 }
 
-async function uploadOneFileDirectWithRetry(file, sig, fileIndex, totalFiles) {
-  try {
-    return await uploadOneFileDirect(file, sig, fileIndex, totalFiles, 1);
-  } catch (err) {
-    uploadInfo.innerText = "Upload interrupted. Retrying once from start...";
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    return await uploadOneFileDirect(file, sig, fileIndex, totalFiles, 2);
-  }
-}
-
-function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
+function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
 
@@ -1010,8 +1000,6 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
 
     const xhr = new XMLHttpRequest();
     const startTime = Date.now();
-    let lastLoaded = 0;
-    let lastProgressTime = Date.now();
     let cloudProcessing = false;
 
     xhr.open(
@@ -1022,26 +1010,9 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
 
     xhr.timeout = 0;
 
-    const stuckWatcher = setInterval(() => {
-      const now = Date.now();
-
-      if (cloudProcessing) {
-        uploadInfo.innerText =
-          "Upload finished. Cloudinary is processing the video. Please wait...";
-        return;
-      }
-
-      if (uploadBtn.disabled && lastLoaded > 0 && now - lastProgressTime > 90000) {
-        clearInterval(stuckWatcher);
-        xhr.abort();
-        reject(new Error("Upload stuck for 90 seconds. Retrying..."));
-      }
-    }, 10000);
-
     xhr.upload.onloadstart = () => {
       uploadBtn.innerText =
-        "Uploading file " + fileIndex + "/" + totalFiles +
-        " directly... Attempt " + attempt;
+        "Uploading file " + fileIndex + "/" + totalFiles + " directly...";
       uploadInfo.innerText =
         "Starting: " + file.name + " (" +
         (file.size / (1024 * 1024)).toFixed(2) + " MB)";
@@ -1050,12 +1021,6 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && event.total > 0) {
         const now = Date.now();
-
-        if (event.loaded > lastLoaded) {
-          lastLoaded = event.loaded;
-          lastProgressTime = now;
-        }
-
         const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
         const seconds = Math.max((now - startTime) / 1000, 1);
         const speedMB = (event.loaded / (1024 * 1024)) / seconds;
@@ -1083,16 +1048,14 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
 
     xhr.upload.onload = () => {
       cloudProcessing = true;
-      uploadProgressBar.style.width = "100%";
-      uploadProgressBar.innerText = "100%";
-      uploadBtn.innerText = "Processing in Cloudinary...";
+      uploadProgressBar.style.width = "99%";
+      uploadProgressBar.innerText = "99%";
+      uploadBtn.innerText = "Cloudinary processing... don't close tab";
       uploadInfo.innerText =
-        "Upload finished. Waiting for Cloudinary response. Large videos can pause here.";
+        "File reached Cloudinary. Video processing can take a few minutes, especially near 96%-99%. Please wait.";
     };
 
     xhr.onload = async () => {
-      clearInterval(stuckWatcher);
-
       if (xhr.status < 200 || xhr.status >= 300) {
         return reject(new Error("Cloudinary upload failed: " + xhr.responseText));
       }
@@ -1103,6 +1066,7 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
         uploadProgressBar.style.width = "100%";
         uploadProgressBar.innerText = "100%";
         uploadBtn.innerText = "Saving file details...";
+        uploadInfo.innerText = "Cloudinary upload completed. Saving to database...";
 
         const saveRes = await fetch(
           "/folder/" + currentFolderId + "/save-cloudinary-file",
@@ -1133,15 +1097,8 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles, attempt) {
       }
     };
 
-    xhr.onerror = () => {
-      clearInterval(stuckWatcher);
-      reject(new Error("Network upload failed"));
-    };
-
-    xhr.onabort = () => {
-      clearInterval(stuckWatcher);
-      reject(new Error("Upload cancelled or stuck"));
-    };
+    xhr.onerror = () => reject(new Error("Network upload failed"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
 
     xhr.send(formData);
   });
