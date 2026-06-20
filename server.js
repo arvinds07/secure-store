@@ -277,13 +277,9 @@ app.get("/manifest.json", (req, res) => {
 app.get("/sw.js", (req, res) => {
   res.type("application/javascript").send(`
     self.addEventListener("install", event => self.skipWaiting());
-    self.addEventListener("activate", event => {
-      event.waitUntil(
-        caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))).then(() => self.clients.claim())
-      );
-    });
+    self.addEventListener("activate", event => self.clients.claim());
     self.addEventListener("fetch", event => {
-      event.respondWith(fetch(event.request));
+      event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
     });
   `);
 });
@@ -506,9 +502,7 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.getRegistrations().then(registrations => {
-    registrations.forEach(registration => registration.unregister());
-  }).catch(() => {});
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
 function installApp() {
@@ -948,8 +942,7 @@ async function uploadToFolder() {
   if (uploadFiles.files.length === 0) return showMsg("Select file", "error");
 
   uploadBtn.disabled = true;
-  uploadBtn.style.pointerEvents = "none";
-  uploadBtn.innerText = "Uploading...";
+  uploadBtn.innerText = "Getting upload permission...";
   uploadProgressWrap.classList.remove("hide");
   uploadProgressBar.style.width = "0%";
   uploadProgressBar.innerText = "0%";
@@ -959,110 +952,138 @@ async function uploadToFolder() {
 
   uploadInfo.innerText =
     "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) +
-    " MB | Keep this tab open.";
+    " MB | Direct Cloudinary upload";
 
-  const formData = new FormData();
-  for (const file of uploadFiles.files) formData.append("files", file);
+  try {
+    const sigRes = await fetch("/cloudinary-signature", {
+      headers: { Authorization: token }
+    });
 
-  const xhr = new XMLHttpRequest();
-  const startTime = Date.now();
+    const sig = await sigRes.json();
 
-  xhr.open("POST", "/folder/" + currentFolderId + "/upload", true);
-  xhr.setRequestHeader("Authorization", token);
-  xhr.timeout = 0;
-
-  let processingTimer = null;
-
-  xhr.upload.onprogress = event => {
-    if (event.lengthComputable && event.total > 0) {
-      const now = Date.now();
-      const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
-      const seconds = Math.max((now - startTime) / 1000, 1);
-      const speedMB = (event.loaded / (1024 * 1024)) / seconds;
-      const remainingMB = (event.total - event.loaded) / (1024 * 1024);
-      const etaSec = speedMB > 0 ? Math.round(remainingMB / speedMB) : 0;
-
-      uploadProgressBar.style.width = percent + "%";
-      uploadProgressBar.innerText = percent + "%";
-
-      uploadBtn.innerText = "Uploading... " + percent + "%";
-
-      uploadInfo.innerText =
-        "Uploaded: " +
-        (event.loaded / (1024 * 1024)).toFixed(2) +
-        " MB / " +
-        (event.total / (1024 * 1024)).toFixed(2) +
-        " MB | Speed: " +
-        speedMB.toFixed(2) +
-        " MB/s | ETA: " +
-        etaSec +
-        " sec";
-    } else {
-      uploadInfo.innerText = "Uploading... please wait.";
+    if (sig.error) throw new Error(sig.error);
+    if (!sig.cloudName || !sig.apiKey || !sig.signature) {
+      throw new Error("Cloudinary signature missing");
     }
-  };
 
-  xhr.upload.onload = () => {
-    uploadProgressBar.style.width = "99%";
-    uploadProgressBar.innerText = "99%";
-    uploadBtn.innerText = "Saving to cloud...";
+    for (let i = 0; i < uploadFiles.files.length; i++) {
+      const file = uploadFiles.files[i];
+      await uploadOneFileDirect(file, sig, i + 1, uploadFiles.files.length);
+    }
 
-    let seconds = 0;
-    processingTimer = setInterval(() => {
-      seconds++;
+    showMsg("Files uploaded successfully", "success");
+    uploadFiles.value = "";
+    uploadInfo.innerText = "";
+    uploadProgressBar.style.width = "100%";
+    uploadProgressBar.innerText = "100%";
+
+    openFolder(currentFolderId);
+    loadDashboard();
+  } catch (err) {
+    console.log(err);
+    showMsg(err.message || "Upload failed", "error");
+  }
+
+  uploadBtn.disabled = false;
+  uploadBtn.innerText = "Upload Files";
+}
+
+function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+
+    formData.append("file", file);
+    formData.append("api_key", sig.apiKey);
+    formData.append("timestamp", sig.timestamp);
+    formData.append("signature", sig.signature);
+    formData.append("folder", sig.folder);
+
+    const xhr = new XMLHttpRequest();
+
+    xhr.open(
+      "POST",
+      "https://api.cloudinary.com/v1_1/" + sig.cloudName + "/auto/upload",
+      true
+    );
+
+    xhr.timeout = 0;
+
+    xhr.upload.onloadstart = () => {
+      uploadBtn.innerText =
+        "Uploading file " + fileIndex + "/" + totalFiles + " directly...";
       uploadInfo.innerText =
-        "Upload reached server. Saving to Cloudinary... " +
-        seconds +
-        " sec. Large videos can take time here.";
-    }, 1000);
-  };
+        "Starting: " + file.name + " (" +
+        (file.size / (1024 * 1024)).toFixed(2) + " MB)";
+    };
 
-  xhr.onload = () => {
-    if (processingTimer) clearInterval(processingTimer);
+    xhr.upload.onprogress = event => {
+      if (event.lengthComputable && event.total > 0) {
+        const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
 
-    uploadBtn.disabled = false;
-    uploadBtn.style.pointerEvents = "auto";
-    uploadBtn.innerText = "Upload Files";
+        uploadProgressBar.style.width = percent + "%";
+        uploadProgressBar.innerText = percent + "%";
 
-    try {
-      const data = JSON.parse(xhr.responseText);
+        uploadBtn.innerText =
+          "Uploading file " + fileIndex + "/" + totalFiles + "... " + percent + "%";
 
-      if (data.error) {
-        uploadProgressBar.style.width = "0%";
-        uploadProgressBar.innerText = "0%";
-        return showMsg(data.error, "error");
+        uploadInfo.innerText =
+          "Uploaded: " +
+          (event.loaded / (1024 * 1024)).toFixed(2) +
+          " MB / " +
+          (event.total / (1024 * 1024)).toFixed(2) +
+          " MB | " + file.name;
+      } else {
+        uploadInfo.innerText =
+          "Uploading directly to Cloudinary... browser cannot calculate exact percentage.";
+      }
+    };
+
+    xhr.onload = async () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        return reject(new Error("Cloudinary upload failed: " + xhr.responseText));
       }
 
-      uploadProgressBar.style.width = "100%";
-      uploadProgressBar.innerText = "100%";
-      uploadInfo.innerText = "Upload complete.";
+      try {
+        const uploaded = JSON.parse(xhr.responseText);
 
-      showMsg("Files uploaded successfully", "success");
-      uploadFiles.value = "";
-      openFolder(currentFolderId);
-      loadDashboard();
-    } catch {
-      showMsg("Upload failed. Please try again.", "error");
-    }
-  };
+        uploadProgressBar.style.width = "100%";
+        uploadProgressBar.innerText = "100%";
+        uploadBtn.innerText = "Saving file details...";
 
-  xhr.onerror = () => {
-    if (processingTimer) clearInterval(processingTimer);
-    uploadBtn.disabled = false;
-    uploadBtn.style.pointerEvents = "auto";
-    uploadBtn.innerText = "Upload Files";
-    showMsg("Network stopped. Upload failed.", "error");
-  };
+        const saveRes = await fetch(
+          "/folder/" + currentFolderId + "/save-cloudinary-file",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token
+            },
+            body: JSON.stringify({
+              originalname: file.name,
+              secure_url: uploaded.secure_url,
+              public_id: uploaded.public_id,
+              resource_type: uploaded.resource_type,
+              type: file.type || "application/octet-stream",
+              size: file.size
+            })
+          }
+        );
 
-  xhr.onabort = () => {
-    if (processingTimer) clearInterval(processingTimer);
-    uploadBtn.disabled = false;
-    uploadBtn.style.pointerEvents = "auto";
-    uploadBtn.innerText = "Upload Files";
-    showMsg("Upload cancelled.", "error");
-  };
+        const saveData = await saveRes.json();
 
-  xhr.send(formData);
+        if (saveData.error) return reject(new Error(saveData.error));
+
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network upload failed"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+
+    xhr.send(formData);
+  });
 }
 
 async function deleteFolder(id) {
@@ -1371,6 +1392,48 @@ app.get("/folder/:id", auth, async (req, res) => {
   });
 });
 
+
+app.get("/cloudinary-signature", auth, (req, res) => {
+  const timestamp = Math.round(Date.now() / 1000);
+  const folder = "secure-store";
+
+  const signature = cloudinary.utils.api_sign_request(
+    { timestamp, folder },
+    process.env.CLOUDINARY_API_SECRET
+  );
+
+  res.json({
+    timestamp,
+    folder,
+    signature,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME
+  });
+});
+
+app.post("/folder/:id/save-cloudinary-file", auth, async (req, res) => {
+  const folder = await Folder.findOne({ id: req.params.id });
+  if (!folder) return res.json({ error: "Folder not found" });
+
+  if (folder.user_id !== req.user.id) {
+    return res.status(403).json({ error: "Only owner can upload" });
+  }
+
+  folder.files.push({
+    id: Date.now().toString() + Math.random().toString(16).slice(2),
+    originalname: req.body.originalname,
+    filename: req.body.secure_url,
+    cloudinaryId: req.body.public_id,
+    resourceType: req.body.resource_type,
+    type: req.body.type || "application/octet-stream",
+    size: Number(req.body.size || 0),
+    uploadedAt: new Date().toISOString()
+  });
+
+  await folder.save();
+  res.json({ message: "Saved" });
+});
+
 app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res) => {
   const folder = await Folder.findOne({ id: req.params.id });
   if (!folder) return res.json({ error: "Folder not found" });
@@ -1380,19 +1443,13 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
   }
 
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.json({ error: "No files received" });
-    }
-
     for (const file of req.files) {
       const options = {
         resource_type: "auto",
-        folder: "secure-store",
-        timeout: 0
+        folder: "secure-store"
       };
 
       let result;
-
       if (file.size > 100 * 1024 * 1024) {
         result = await cloudinary.uploader.upload_large(file.path, {
           ...options,
@@ -1419,19 +1476,8 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
     await folder.save();
     res.json({ message: "Files uploaded" });
   } catch (err) {
-    console.log("Upload error:", err);
-
-    try {
-      if (req.files) {
-        for (const file of req.files) {
-          if (file.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
-        }
-      }
-    } catch (cleanupErr) {
-      console.log("Cleanup error:", cleanupErr.message);
-    }
-
-    res.json({ error: "Upload failed. Check internet or try a smaller file." });
+    console.log(err);
+    res.json({ error: "Cloudinary upload failed" });
   }
 });
 
