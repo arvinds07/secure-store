@@ -277,9 +277,15 @@ app.get("/manifest.json", (req, res) => {
 app.get("/sw.js", (req, res) => {
   res.type("application/javascript").send(`
     self.addEventListener("install", event => self.skipWaiting());
-    self.addEventListener("activate", event => self.clients.claim());
+    self.addEventListener("activate", event => {
+      event.waitUntil(
+        caches.keys()
+          .then(keys => Promise.all(keys.map(key => caches.delete(key))))
+          .then(() => self.clients.claim())
+      );
+    });
     self.addEventListener("fetch", event => {
-      event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+      event.respondWith(fetch(event.request));
     });
   `);
 });
@@ -502,7 +508,9 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.getRegistrations().then(registrations => {
+    registrations.forEach(registration => registration.unregister());
+  }).catch(() => {});
 }
 
 function installApp() {
@@ -942,7 +950,8 @@ async function uploadToFolder() {
   if (uploadFiles.files.length === 0) return showMsg("Select file", "error");
 
   uploadBtn.disabled = true;
-  uploadBtn.innerText = "Getting upload permission...";
+  uploadBtn.style.pointerEvents = "none";
+  uploadBtn.innerText = "Preparing upload...";
   uploadProgressWrap.classList.remove("hide");
   uploadProgressBar.style.width = "0%";
   uploadProgressBar.innerText = "0%";
@@ -952,7 +961,7 @@ async function uploadToFolder() {
 
   uploadInfo.innerText =
     "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) +
-    " MB | Direct Cloudinary upload";
+    " MB | Direct upload. Keep this tab open.";
 
   try {
     const sigRes = await fetch("/cloudinary-signature", {
@@ -966,17 +975,16 @@ async function uploadToFolder() {
       throw new Error("Cloudinary signature missing");
     }
 
-    for (let i = 0; i < uploadFiles.files.length; i++) {
-      const file = uploadFiles.files[i];
-      await uploadOneFileDirect(file, sig, i + 1, uploadFiles.files.length);
+    for (const file of uploadFiles.files) {
+      await uploadOneFileDirect(file, sig);
     }
 
-    showMsg("Files uploaded successfully", "success");
-    uploadFiles.value = "";
-    uploadInfo.innerText = "";
     uploadProgressBar.style.width = "100%";
     uploadProgressBar.innerText = "100%";
+    uploadInfo.innerText = "Upload complete.";
+    showMsg("Files uploaded successfully", "success");
 
+    uploadFiles.value = "";
     openFolder(currentFolderId);
     loadDashboard();
   } catch (err) {
@@ -985,12 +993,22 @@ async function uploadToFolder() {
   }
 
   uploadBtn.disabled = false;
+  uploadBtn.style.pointerEvents = "auto";
   uploadBtn.innerText = "Upload Files";
 }
 
-function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
+function uploadOneFileDirect(file, sig) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
+
+    const largeVideo = file.type.startsWith("video/") && file.size > 100 * 1024 * 1024;
+
+    /*
+      Important:
+      Large videos are uploaded as "raw" to avoid long Cloudinary video processing stuck near 96%-99%.
+      Smaller images/videos use "auto" for normal preview.
+    */
+    const uploadResourceType = largeVideo ? "raw" : "auto";
 
     formData.append("file", file);
     formData.append("api_key", sig.apiKey);
@@ -999,18 +1017,18 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
     formData.append("folder", sig.folder);
 
     const xhr = new XMLHttpRequest();
+    const startTime = Date.now();
 
     xhr.open(
       "POST",
-      "https://api.cloudinary.com/v1_1/" + sig.cloudName + "/auto/upload",
+      "https://api.cloudinary.com/v1_1/" + sig.cloudName + "/" + uploadResourceType + "/upload",
       true
     );
 
     xhr.timeout = 0;
 
     xhr.upload.onloadstart = () => {
-      uploadBtn.innerText =
-        "Uploading file " + fileIndex + "/" + totalFiles + " directly...";
+      uploadBtn.innerText = "Uploading...";
       uploadInfo.innerText =
         "Starting: " + file.name + " (" +
         (file.size / (1024 * 1024)).toFixed(2) + " MB)";
@@ -1018,24 +1036,39 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
 
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && event.total > 0) {
+        const now = Date.now();
         const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+        const seconds = Math.max((now - startTime) / 1000, 1);
+        const speedMB = (event.loaded / (1024 * 1024)) / seconds;
+        const remainingMB = (event.total - event.loaded) / (1024 * 1024);
+        const etaSec = speedMB > 0 ? Math.round(remainingMB / speedMB) : 0;
 
         uploadProgressBar.style.width = percent + "%";
         uploadProgressBar.innerText = percent + "%";
 
-        uploadBtn.innerText =
-          "Uploading file " + fileIndex + "/" + totalFiles + "... " + percent + "%";
+        uploadBtn.innerText = "Uploading... " + percent + "%";
 
         uploadInfo.innerText =
           "Uploaded: " +
           (event.loaded / (1024 * 1024)).toFixed(2) +
           " MB / " +
           (event.total / (1024 * 1024)).toFixed(2) +
-          " MB | " + file.name;
+          " MB | Speed: " +
+          speedMB.toFixed(2) +
+          " MB/s | ETA: " +
+          etaSec +
+          " sec";
       } else {
-        uploadInfo.innerText =
-          "Uploading directly to Cloudinary... browser cannot calculate exact percentage.";
+        uploadInfo.innerText = "Uploading... please wait.";
       }
+    };
+
+    xhr.upload.onload = () => {
+      uploadProgressBar.style.width = "99%";
+      uploadProgressBar.innerText = "99%";
+      uploadBtn.innerText = "Finishing upload...";
+      uploadInfo.innerText =
+        "Upload data reached Cloudinary. Finishing response... Please wait.";
     };
 
     xhr.onload = async () => {
@@ -1049,6 +1082,7 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
         uploadProgressBar.style.width = "100%";
         uploadProgressBar.innerText = "100%";
         uploadBtn.innerText = "Saving file details...";
+        uploadInfo.innerText = "Saving file details to database...";
 
         const saveRes = await fetch(
           "/folder/" + currentFolderId + "/save-cloudinary-file",
@@ -1062,7 +1096,7 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
               originalname: file.name,
               secure_url: uploaded.secure_url,
               public_id: uploaded.public_id,
-              resource_type: uploaded.resource_type,
+              resource_type: uploaded.resource_type || uploadResourceType,
               type: file.type || "application/octet-stream",
               size: file.size
             })
@@ -1079,8 +1113,8 @@ function uploadOneFileDirect(file, sig, fileIndex, totalFiles) {
       }
     };
 
-    xhr.onerror = () => reject(new Error("Network upload failed"));
-    xhr.onabort = () => reject(new Error("Upload cancelled"));
+    xhr.onerror = () => reject(new Error("Network upload failed. Try mobile hotspot or smaller file."));
+    xhr.onabort = () => reject(new Error("Upload cancelled."));
 
     xhr.send(formData);
   });
