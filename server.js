@@ -277,9 +277,13 @@ app.get("/manifest.json", (req, res) => {
 app.get("/sw.js", (req, res) => {
   res.type("application/javascript").send(`
     self.addEventListener("install", event => self.skipWaiting());
-    self.addEventListener("activate", event => self.clients.claim());
+    self.addEventListener("activate", event => {
+      event.waitUntil(
+        caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))).then(() => self.clients.claim())
+      );
+    });
     self.addEventListener("fetch", event => {
-      event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+      event.respondWith(fetch(event.request));
     });
   `);
 });
@@ -502,7 +506,9 @@ window.addEventListener("beforeinstallprompt", event => {
 });
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.getRegistrations().then(registrations => {
+    registrations.forEach(registration => registration.unregister());
+  }).catch(() => {});
 }
 
 function installApp() {
@@ -942,7 +948,8 @@ async function uploadToFolder() {
   if (uploadFiles.files.length === 0) return showMsg("Select file", "error");
 
   uploadBtn.disabled = true;
-  uploadBtn.innerText = "Starting upload...";
+  uploadBtn.style.pointerEvents = "none";
+  uploadBtn.innerText = "Uploading...";
   uploadProgressWrap.classList.remove("hide");
   uploadProgressBar.style.width = "0%";
   uploadProgressBar.innerText = "0%";
@@ -952,7 +959,7 @@ async function uploadToFolder() {
 
   uploadInfo.innerText =
     "Selected size: " + (totalSize / (1024 * 1024)).toFixed(2) +
-    " MB | Keep this tab open until upload completes.";
+    " MB | Keep this tab open.";
 
   const formData = new FormData();
   for (const file of uploadFiles.files) formData.append("files", file);
@@ -965,18 +972,9 @@ async function uploadToFolder() {
   xhr.timeout = 0;
 
   let processingTimer = null;
-  let lastLoaded = 0;
-
-  xhr.upload.onloadstart = () => {
-    uploadBtn.innerText = "Uploading...";
-    uploadInfo.innerText =
-      "Upload started: " + (totalSize / (1024 * 1024)).toFixed(2) + " MB";
-  };
 
   xhr.upload.onprogress = event => {
     if (event.lengthComputable && event.total > 0) {
-      lastLoaded = event.loaded;
-
       const now = Date.now();
       const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
       const seconds = Math.max((now - startTime) / 1000, 1);
@@ -986,6 +984,7 @@ async function uploadToFolder() {
 
       uploadProgressBar.style.width = percent + "%";
       uploadProgressBar.innerText = percent + "%";
+
       uploadBtn.innerText = "Uploading... " + percent + "%";
 
       uploadInfo.innerText =
@@ -1006,15 +1005,15 @@ async function uploadToFolder() {
   xhr.upload.onload = () => {
     uploadProgressBar.style.width = "99%";
     uploadProgressBar.innerText = "99%";
-    uploadBtn.innerText = "Saving to cloud... please wait";
+    uploadBtn.innerText = "Saving to cloud...";
 
     let seconds = 0;
     processingTimer = setInterval(() => {
       seconds++;
       uploadInfo.innerText =
-        "Upload reached server. Now saving to Cloudinary... " +
+        "Upload reached server. Saving to Cloudinary... " +
         seconds +
-        " sec. Large videos may stay here for a few minutes.";
+        " sec. Large videos can take time here.";
     }, 1000);
   };
 
@@ -1022,6 +1021,7 @@ async function uploadToFolder() {
     if (processingTimer) clearInterval(processingTimer);
 
     uploadBtn.disabled = false;
+    uploadBtn.style.pointerEvents = "auto";
     uploadBtn.innerText = "Upload Files";
 
     try {
@@ -1035,10 +1035,10 @@ async function uploadToFolder() {
 
       uploadProgressBar.style.width = "100%";
       uploadProgressBar.innerText = "100%";
+      uploadInfo.innerText = "Upload complete.";
 
       showMsg("Files uploaded successfully", "success");
       uploadFiles.value = "";
-      uploadInfo.innerText = "Upload complete.";
       openFolder(currentFolderId);
       loadDashboard();
     } catch {
@@ -1049,13 +1049,15 @@ async function uploadToFolder() {
   xhr.onerror = () => {
     if (processingTimer) clearInterval(processingTimer);
     uploadBtn.disabled = false;
+    uploadBtn.style.pointerEvents = "auto";
     uploadBtn.innerText = "Upload Files";
-    showMsg("Upload failed because network connection stopped.", "error");
+    showMsg("Network stopped. Upload failed.", "error");
   };
 
   xhr.onabort = () => {
     if (processingTimer) clearInterval(processingTimer);
     uploadBtn.disabled = false;
+    uploadBtn.style.pointerEvents = "auto";
     uploadBtn.innerText = "Upload Files";
     showMsg("Upload cancelled.", "error");
   };
@@ -1394,7 +1396,7 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
       if (file.size > 100 * 1024 * 1024) {
         result = await cloudinary.uploader.upload_large(file.path, {
           ...options,
-          chunk_size: 10 * 1024 * 1024
+          chunk_size: 20 * 1024 * 1024
         });
       } else {
         result = await cloudinary.uploader.upload(file.path, options);
@@ -1429,7 +1431,7 @@ app.post("/folder/:id/upload", auth, upload.array("files", 100), async (req, res
       console.log("Cleanup error:", cleanupErr.message);
     }
 
-    res.json({ error: "Upload failed. Please try smaller file or check internet connection." });
+    res.json({ error: "Upload failed. Check internet or try a smaller file." });
   }
 });
 
