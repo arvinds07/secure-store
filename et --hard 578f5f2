@@ -1,0 +1,18 @@
+[33mcf92d35[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m final large video upload fix
+[33md1a324f[m direct cloudinary upload fix
+[33mfd8b264[m fix upload cache stable
+[33m02a849f[m stable upload final
+[33m0c77e6f[m stable direct upload no retry
+[33m3da9b15[m direct upload speed retry
+[33mc17b555[m remove register and improve upload progress
+[33m578f5f2[m final fixed code
+[33mf27bb97[m fix delete button js
+[33mac942c9[m single file delete
+[33mf0886e0[m remove mongo debug
+[33m222cd22[m debug mongo uri
+[33m296f637[m mongodb connect
+[33m5e7d0a5[m add cloudinary upload and download fix
+[33mfec42d7[m new secure store update
+[33m6b492ed[m add google login upgrade
+[33m39da863[m add logo
+[33md9c993f[m first upload
